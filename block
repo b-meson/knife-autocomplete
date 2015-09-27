@@ -1,0 +1,230 @@
+#!/bin/bash    
+# Knife autocomplete script.  
+# Authors: Freddy Martinez & Carles Figuerola
+
+# This file is built using a mixture of crontab and Chef Cookbooks in 
+# our environment.  The directory of the files / building of the flat files
+# be read in while depend on your system. 
+
+CACHE_DIR=/etc/bash_completion.d/block_cache
+
+if [ -f /etc/bash_completion.d/block_cache/role.txt ]; then
+    ROLES_FILE=${CACHE_DIR}/role.txt
+else
+    ROLES_FILE=""
+fi
+
+if [ -f /etc/bash_completion.d/block_cache/environment.txt ]; then
+    ENV_FILE=${CACHE_DIR}/environment.txt
+else
+    ENV_FILE=""
+fi
+
+if [ -f /etc/bash_completion.d/block_cache/node.txt ]; then
+    INSTANCE_FILE=${CACHE_DIR}/node.txt
+else
+    INSTANCE_FILE=""
+fi
+
+if [ -f /etc/bash_completion.d/block_cache/host.txt ]; then
+    HOSTS_FILE=${CACHE_DIR}/host.txt
+else
+    HOSTS_FILE=""
+fi
+
+
+if [ -f $ROLES_FILE ] 
+then
+  export ROLE_LIST=$(cat $ROLES_FILE) ##knife role list > /etc/bash_completion.d/block_cache/role.txt
+else
+  export ROLE_LIST=""
+fi
+
+# The host list that is passed to knife depends on the environment; some environments require the FQDN and others 
+# don't.  Check the environment list and use regex to populate lists accordingly. 
+
+if [ -f $ENV_FILE ] 
+then
+  export ENV_LIST=$(cat $ENV_FILE) ## knife environment list | grep -v _default > /etc/bash_completion.d/block_cache/environment.txt
+  if echo $ENV_LIST | egrep "(staging|production)" >/dev/null 
+  then
+    ENV_TYPE="prod"
+  else
+    ENV_TYPE="ppv"
+  fi
+else
+  export ENV_LIST=""
+fi
+
+# Declare an array variable to handle the massive list of virtual machines and operate on them. 
+# Without this array your script will crash
+
+if [ -f $INSTANCE_FILE ]
+then
+ read -a INSTANCE_LIST <<< $(cat /etc/bash_completion.d/block_cache/node.txt) ## knife node list | egrep "\.[oc][a-z-]+\.orbitz\.net" > /etc/bash_completion.d/block_cache/node.txt 
+else
+  export INSTANCE_LIST=""
+fi
+
+if [ -f $HOSTS_FILE ]
+then
+  export HOST_LIST=$(cat $HOSTS_FILE) ## knife search "role:cloudstack-agent" | grep ^Node | awk '{print $3}' > /etc/bash_completion.d/block_cache/host.txt
+else
+  export HOST_LIST=""
+fi
+
+if [[ "$ENV_TYPE" == "prod" ]]
+then
+  HOST_LIST=$(echo $HOST_LIST |  egrep -o "( |^.)[^\. ]*+")
+fi
+
+
+# Define a set of variables that will be used. First we want to know the current word that is being typed
+# Some knife options to auto complete depend on the not just the current word but the word used two words ago.
+# (E.g. knife role edit and knife environment edit are both valid commands but the list the operate are are different. 
+# Therefore, we should check if role or environment was used before edit, for that we defined the prevprev variable.
+
+_block() {
+
+	local cur prev opts
+	COMPREPLY=()
+	cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        prevprev="$( [ $(($COMP_CWORD-2)) -ge 0 ] && echo ${COMP_WORDS[COMP_CWORD-2]} )"
+        role="${COMP_WORDS[3]}"
+	opts="app cloudstack environment role ssh user"
+	
+	case "${prevprev}" in
+	  maint)
+	    COMPREPLY=( $( compgen -W "true false" -- ${cur}))
+	    return 0
+	  ;;
+	  notes)
+	    COMPREPLY=( $( compgen -W "add remove" -- ${cur}))
+	    return 0
+	  ;;
+	esac
+
+	case "${prev}" in 
+	 app)
+	  COMPREPLY=( $( compgen -W "dewonk pause resume start \
+			status stop tag" -- ${cur}))
+	  return 0
+	 ;;
+	 cloudstack)
+           COMPREPLY=( $( compgen -W "dns guest host resumeall status" -- ${cur}))
+           return 0
+         ;;
+	 host)
+           COMPREPLY=( $( compgen -W "drain maint notes pause status" -- ${cur}))
+           return 0
+         ;;
+         knife)
+          COMPREPLY=( $( compgen -W "$opts" -- ${cur}))
+          return 0
+         ;;
+	 start|stop|dewonk|resume)
+	   COMPREPLY=( $( compgen -W "$ROLE_LIST" -- $cur))
+	   return 0
+	 ;;
+         -E)
+           COMPREPLY=( $( compgen -W "$ENV_LIST" -- $cur)) 
+           return 0
+         ;;
+	 -i)
+           COMPREPLY=( $( compgen -W "$(printf -- '%s\n' "${INSTANCE_LIST[@]}" | grep -o -E "\b$role[^ ]+")" -- $cur))
+           return 0
+         ;;
+	 -h)
+	   COMPREPLY=( $( compgen -W "$HOST_LIST" -- $cur))
+           return 0
+           ;;
+	 environment|role)
+	   COMPREPLY=( $( compgen -W "list show edit" -- $cur))
+	   return 0
+	 ;;
+	 pause)
+           case "${prevprev}" in
+             app)
+               COMPREPLY=( $( compgen -W "$ROLE_LIST" -- $cur))
+               return 0
+               ;;
+             host)
+               COMPREPLY=( $( compgen -W "$HOST_LIST" -- $cur))
+               return 0
+               ;;
+           esac
+           return 0
+           ;;
+	 status)
+           case "${prevprev}" in
+             cloudstack)
+               COMPREPLY=( $( compgen -W "--no-vms" -- $cur))
+               return 0
+               ;;
+             host)
+               COMPREPLY=( $( compgen -W "$HOST_LIST" -- $cur))
+               return 0
+               ;;
+           esac
+           return 0
+           ;;
+	 drain|maint|notes)
+	   COMPREPLY=( $( compgen -W "$HOST_LIST" -- $cur))  
+	   return 0
+	   ;;
+	 dns)
+	   COMPREPLY=( $( compgen -W "add remove" -- ${cur}))
+	   return 0
+	   ;;
+	 add|remove)
+	   if [[ ${prevprev} == dns ]] ; then
+	     COMPREPLY=( $( compgen -W "$(printf -- '%s\n' "${INSTANCE_LIST[@]}")" -- $cur))
+	   fi
+	   return 0
+	   ;;
+	 guest)
+	   COMPREPLY=( $( compgen -W "reboot" -- $cur))
+           return 0
+           ;;
+	 reboot)
+	   if [[ ${prevprev} == guest ]]; then 
+             COMPREPLY=( $( compgen -W "$(printf -- '%s\n' "${INSTANCE_LIST[@]}")" -- $cur))
+ 	   fi 
+	   return 0
+	   ;;
+         show|edit)
+           case "${prevprev}" in
+	     role)
+	       COMPREPLY=( $( compgen -W "$ROLE_LIST" -- $cur))
+	       return 0
+	       ;;
+	     environment)
+  	       COMPREPLY=( $( compgen -W "$ENV_LIST" -- $cur))
+	       return 0
+	       ;;
+	   esac
+	   return 0
+	   ;;
+	esac
+
+# Return the expected values for knife options. For example, knife -[TAB] should tell you that there is a
+# --help flag available. 
+        case "${cur}" in
+         -*)
+          COMPREPLY=( $( compgen -W '-s -k -c -d -e -E -F -z -u -V -v -y -h \
+           --server-url --chef-zero-host --chef-zero-port --key --color --no-color \
+           --config --defaults --disable-editing --editor --environment --format \
+           --local-mode --user --print-after --verbose --version --yes --help' -- "$cur"))
+        ;;
+	esac 
+
+	return 0
+}
+
+# Wraps block autcomplete to be called when knife is used in a command. 
+# You can do this by sourcing the file `. block` after you login but the best
+# way to do it is to throw it in /etc/bash_complete.d/ to share for all users. 
+  
+complete -F _block knife
+
